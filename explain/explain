@@ -1,0 +1,139 @@
+#!/bin/zsh
+
+
+### LOGGING UTILITY ###
+#
+# load simple-logger if it is available
+if source "$LOGGER_SOURCE_LOCATION" 2>/dev/null;
+then
+  log_source "explain"
+  log_level 'debug'
+else
+  # empty logging functions to avoid errors
+  #  for anyone who lacks simple-logger
+  warn  () { echo $@ > /dev/null }
+  state () { echo $@ > /dev/null }
+  debug () { echo $@ > /dev/null }
+fi
+
+###
+# shellcheck disable=SC2139
+alias READER="$(  (command -v bat &>/dev/null) && echo "bat -l'sh'" || echo "cat"  )"
+###
+typeset -g EXPANSION_ON_SPACE=false
+typeset -ga EXPANSION_FILTER
+##
+RED='\033[1;31m'
+GREEN='\033[0;32m'
+PURPLE='\033[0;35m'
+NC='\033[0m' # No Color
+###
+
+
+select-from-list () {
+  IFS=$'\n'
+
+  debug "${${@}//${IFS:0:1}/, }"
+
+  debug "select from:  ${${@}//${IFS:0:1}/, }"
+
+  list=()
+  if [ $# -gt 1 ]; then
+    for line in "$@";
+    do
+      list+=("$line");
+    done
+  else
+    echo "${@[0]}"
+    return;
+  fi
+
+  # if (command -v fzf >/dev/null 2>&1)
+  # then
+  #     printf '%s\n' "${list[@]}" | fzf --height 40% --reverse
+  # else
+    length=0
+    for x in ${list[@]}
+    do
+       if [ ${#x} -gt $length ]
+       then
+          length=${#x}
+       fi
+    done
+    
+    local COLUMNS=$length
+    local PS3="option: "
+    select item in ${list[@]}
+    do
+      echo "$item"
+      return;
+    done
+  # fi
+}
+
+find-alias () {
+  echo -n "searching..."
+
+  source="$(${$(ps -cp "$$" -o command="")##-} -ixlc : 2>&1 | grep "alias '$1=.*'" | tail -1)"
+  read file line <<< $(echo $source | sed -E "s/^\+(.*\/.*):([0-9]+)> alias '$1=.*'/\1 \2/")
+  statement="$(cat $file | sed -n "${line}p")"
+  
+  echo -n "\r"
+  echo "${PURPLE}$file\n${GREEN}$line${NC}:${RED}$statement${NC}"
+}
+
+if [[ $# -gt 0 ]]
+then
+  args=($@)
+  command=${args[-1]}
+  debug "command: $command"
+  [ $# -gt 0 ] && unset $args[-1]
+
+  [[ ! $(command -v $command) ]] && echo "command not found: '$command'" && return 0
+
+  target="$( IFS=$'\n' select-from-list $(type -a "$command" | uniq) )"
+  debug "target: $target"
+
+  target="$(echo "$target" | sed -nE "s/^$command is( an?)? (.*)/\2/p")"
+  debug "target: $target"
+
+  case "$target" in
+    alias\ *)
+      debug "alias!"
+      find-alias $command
+      ;;
+    command\ *)
+      debug "command!"
+      READER $(command -v "$command") $args
+      ;;
+    ?(shell )function\ *)
+      debug "function!"
+      type -f "$command" | READER $args
+      ;;
+    hash\ *)
+      debug "hash!"
+      output=$(hash -m "$1")
+      READER ${output##*=} $args
+      ;;
+    shell\ builtin)
+      debug "builtin!"
+      man $command
+      ;;
+    */*)
+      debug "path!"
+      if [[ $(file "$target" | grep -v 'script' | grep -E 'binary|executable') ]]
+      then
+        man $command 2>/dev/null || $command --help
+      else
+        READER $target
+      fi
+      ;;
+    *)
+      debug "other!"
+      echo $target
+      ;;
+  esac
+else
+  echo "You must provide a command to explain!"
+fi
+
